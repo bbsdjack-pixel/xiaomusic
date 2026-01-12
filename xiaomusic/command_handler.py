@@ -58,6 +58,17 @@ class CommandHandler:
                 await self.xiaomusic.check_replay(did)
                 return
 
+            # 极速打断：如果是语音指令（非控制面板），立即停止小爱播放
+            if not ctrl_panel:
+                try:
+                    if did in self.xiaomusic.devices:
+                        # 启动异步任务去停止，不阻塞当前流程，尽可能快
+                        asyncio.create_task(
+                            self.xiaomusic.devices[did].group_force_stop_xiaoai()
+                        )
+                except Exception as e:
+                    self.log.warning(f"极速打断尝试失败: {e}")
+
             # 执行命令
             func = getattr(self.xiaomusic, opvalue)
             await func(did=did, arg1=oparg)

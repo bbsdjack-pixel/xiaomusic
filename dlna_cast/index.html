@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>局域网 DLNA 投屏工具</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .section {
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #eee;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        input[type="file"] {
+            margin-top: 10px;
+            width: 100%;
+        }
+        #deviceList {
+            list-style: none;
+            padding: 0;
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .device-item {
+            padding: 10px 15px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .device-item:last-child {
+            border-bottom: none;
+        }
+        .device-item:hover {
+            background-color: #f8f9fa;
+        }
+        .device-item.selected {
+            background-color: #e8f0fe;
+            border-left: 4px solid #007bff;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            text-align: center;
+            font-size: 14px;
+            color: #495057;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(0,0,0,.1);
+            border-radius: 50%;
+            border-top-color: #007bff;
+            animation: spin 1s ease-in-out infinite;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DLNA 投屏工具</h1>
+        
+        <div class="section">
+            <h3>1. 发现设备</h3>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <button id="scanBtn" onclick="scanDevices()">扫描设备</button>
+                <span id="scanStatus"></span>
+            </div>
+            <p style="font-size: 12px; color: #666;">请确保设备和本电脑在同一局域网内</p>
+            <ul id="deviceList">
+                <li class="device-item" style="color: #888; text-align: center; cursor: default;">暂无设备，请点击扫描</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>2. 选择文件</h3>
+            <input type="file" id="mediaFile" accept="audio/*,video/*,image/*">
+            <div id="fileInfo" style="margin-top: 10px; font-size: 14px;"></div>
+        </div>
+
+        <div class="section">
+            <h3>3. 播放控制</h3>
+            <div class="controls">
+                <button id="playBtn" onclick="playMedia()" disabled>播放</button>
+                <button id="pauseBtn" onclick="control('pause')" disabled>暂停</button>
+                <button id="stopBtn" onclick="control('stop')" disabled>停止</button>
+            </div>
+            <div id="statusMsg" class="status">准备就绪</div>
+        </div>
+    </div>
+
+    <script>
+        let selectedDevice = null;
+        let devices = [];
+
+        async function scanDevices() {
+            const btn = document.getElementById('scanBtn');
+            const status = document.getElementById('scanStatus');
+            const list = document.getElementById('deviceList');
+            
+            btn.disabled = true;
+            status.innerHTML = '<span class="loading"></span>扫描中...';
+            list.innerHTML = '';
+            
+            try {
+                const response = await fetch('/api/scan');
+                const data = await response.json();
+                devices = data.devices;
+                
+                if (devices.length === 0) {
+                    list.innerHTML = '<li class="device-item" style="color: #888; text-align: center; cursor: default;">未发现设备，请重试</li>';
+                } else {
+                    devices.forEach((dev, index) => {
+                        const li = document.createElement('li');
+                        li.className = 'device-item';
+                        li.innerHTML = `<span>${dev.friendly_name}</span> <span style="font-size: 12px; color: #aaa;">${dev.host}</span>`;
+                        li.onclick = () => selectDevice(index, li);
+                        list.appendChild(li);
+                    });
+                }
+            } catch (error) {
+                console.error('Scan error:', error);
+                status.innerText = '扫描失败: ' + error.message;
+            } finally {
+                btn.disabled = false;
+                if (status.innerHTML.includes('loading')) status.innerText = '';
+            }
+        }
+
+        function selectDevice(index, element) {
+            selectedDevice = devices[index];
+            document.querySelectorAll('.device-item').forEach(el => el.classList.remove('selected'));
+            element.classList.add('selected');
+            updateButtons();
+            log(`已选择设备: ${selectedDevice.friendly_name}`);
+        }
+
+        document.getElementById('mediaFile').addEventListener('change', function(e) {
+            updateButtons();
+            if (this.files[0]) {
+                log(`已选择文件: ${this.files[0].name}`);
+            }
+        });
+
+        function updateButtons() {
+            const hasDevice = !!selectedDevice;
+            const hasFile = !!document.getElementById('mediaFile').files[0];
+            document.getElementById('playBtn').disabled = !(hasDevice && hasFile);
+            document.getElementById('pauseBtn').disabled = !hasDevice;
+            document.getElementById('stopBtn').disabled = !hasDevice;
+        }
+
+        async function playMedia() {
+            const fileInput = document.getElementById('mediaFile');
+            const file = fileInput.files[0];
+            if (!selectedDevice || !file) return;
+
+            log("正在上传并投屏...");
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('device_url', selectedDevice.control_url);
+            formData.append('service_type', selectedDevice.service_type);
+
+            try {
+                const response = await fetch('/api/play', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                if (result.success) {
+                    log("播放指令已发送");
+                } else {
+                    log("播放失败: " + result.message);
+                }
+            } catch (error) {
+                log("错误: " + error.message);
+            }
+        }
+
+        async function control(action) {
+            if (!selectedDevice) return;
+            log(`正在发送 ${action} 指令...`);
+            
+            try {
+                const response = await fetch('/api/control', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        action: action,
+                        device_url: selectedDevice.control_url,
+                        service_type: selectedDevice.service_type
+                    })
+                });
+                const result = await response.json();
+                log(result.message);
+            } catch (error) {
+                log("错误: " + error.message);
+            }
+        }
+
+        function log(msg) {
+            const el = document.getElementById('statusMsg');
+            el.innerText = msg;
+            console.log(msg);
+        }
+    </script>
+</body>
+</html>

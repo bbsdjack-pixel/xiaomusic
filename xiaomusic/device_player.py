@@ -27,6 +27,7 @@ from xiaomusic.utils import (
     custom_sort_key,
     list2str,
 )
+from xiaomusic.netease_api import NeteaseMusicApi
 
 
 class XiaoMusicDevice:
@@ -215,7 +216,73 @@ class XiaoMusicDevice:
                 name = self.get_cur_music()
         self.log.info(f"play. search_key:{search_key} name:{name}: exact:{exact}")
 
-        # 本地歌曲不存在时下载
+        # 优先尝试网易云播放 (跳过本地搜索)
+        try:
+            query = search_key if search_key else name
+            if query:
+                self.log.info(f"优先尝试网易云搜索: {query}")
+                netease_api = NeteaseMusicApi()
+                search_result = await netease_api.search(query, limit=1)
+                songs = search_result.get("result", {}).get("songs", [])
+                if songs:
+                    song = songs[0]
+                    song_id = song["id"]
+                    song_name = song["name"]
+                    artists = ",".join([ar["name"] for ar in song["ar"]])
+                    display_name = f"{song_name}-{artists}"
+                    duration_ms = song.get("dt", 0)
+                    
+                    self.log.info(f"网易云找到: {display_name} duration:{duration_ms}")
+                    
+                    # 获取播放链接
+                    play_url = None
+                    # Try EAPI
+                    try:
+                        url_res = await netease_api.get_song_url_v1(song_id, level='lossless')
+                        if url_res.get("data") and url_res["data"][0].get("url"):
+                            play_url = url_res["data"][0]["url"]
+                    except Exception as e:
+                        self.log.warning(f"EAPI get url failed: {e}")
+                    
+                    # Try WEAPI if EAPI failed
+                    if not play_url:
+                        try:
+                            url_res = await netease_api.get_song_url(song_id)
+                            if url_res.get("data") and url_res["data"][0].get("url"):
+                                play_url = url_res["data"][0]["url"]
+                        except Exception as e:
+                            self.log.warning(f"WEAPI get url failed: {e}")
+
+                    if play_url:
+                        self.log.info(f"网易云播放: {play_url}")
+                        
+                        # 停止当前播放
+                        await self.group_force_stop_xiaoai()
+                        
+                        # 播放
+                        await self.group_player_play(play_url, display_name)
+                        
+                        self._playing = True
+                        self.device.cur_music = display_name
+                        
+                        # 设置定时器
+                        if duration_ms > 0:
+                            sec = duration_ms / 1000
+                            # 记录播放信息
+                            self._start_time = time.time()
+                            self._duration = sec
+                            self._paused_time = 0
+                            await self.set_next_music_timeout(sec + self.config.delay_sec)
+                        
+                        return
+                    else:
+                        self.log.warning("网易云未获取到播放链接")
+                else:
+                    self.log.info("网易云未搜索到歌曲")
+        except Exception as e:
+            self.log.error(f"网易云处理异常: {e}")
+
+        # 网易云失败或未找到，回退到本地搜索/下载
         if exact:
             names = self.xiaomusic.find_real_music_name(name, n=1)
         else:
@@ -245,6 +312,9 @@ class XiaoMusicDevice:
             await self._playmusic(name)
         elif not self.xiaomusic.is_music_exist(name):
             self.log.info(f"本地不存在歌曲{name}")
+            
+            # (已尝试过网易云，这里只处理下载兜底)
+
             if self.config.disable_download:
                 await self.do_tts(f"本地不存在歌曲{name}")
                 return
