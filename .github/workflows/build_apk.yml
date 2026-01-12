@@ -26,11 +26,19 @@ jobs:
           swap-storage: true
 
       - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
-        with:
-          command: buildozer android debug
-          buildozer_version: master
+        # 使用官方 Kivy Buildozer Docker 镜像，更稳定
+        run: |
+          # 确保 .buildozer 目录存在，避免权限问题
+          mkdir -p .buildozer
+          chmod 777 .buildozer
+          
+          # 运行 Docker 容器进行构建
+          docker run --rm \
+            --volume "$PWD":/home/user/hostcwd \
+            --volume "$PWD/.buildozer":/home/user/.buildozer \
+            --entrypoint buildozer \
+            kivy/buildozer \
+            android debug
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
